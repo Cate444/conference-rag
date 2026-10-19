@@ -417,3 +417,6 @@ enabled = true
 # We verify users ourselves in _shared/auth.ts (the gateway can't verify the newer ES256 tokens yet)
 [functions.embed-question]
 verify_jwt = false
+
+[functions.generate-answer]
+verify_jwt = false
