@@ -62,6 +62,11 @@ CREATE TABLE IF NOT EXISTS sentence_embeddings (
 CREATE INDEX IF NOT EXISTS sentence_embeddings_talk_id_idx 
 ON sentence_embeddings(talk_id);
 
+-- Vector index (HNSW) so similarity search doesn't scan every row.
+-- Without it, match_sentences() exceeds the authenticated role's statement timeout.
+CREATE INDEX IF NOT EXISTS sentence_embeddings_embedding_hnsw_idx
+ON sentence_embeddings USING hnsw (embedding vector_cosine_ops);
+
 -- Enable Row Level Security
 ALTER TABLE sentence_embeddings ENABLE ROW LEVEL SECURITY;
 
@@ -102,7 +107,9 @@ TO anon, authenticated
 USING (true);
 
 -- Create function for similarity search
-CREATE OR REPLACE FUNCTION match_sentences(
+-- (DROP first: CREATE OR REPLACE can't change a function's return columns)
+DROP FUNCTION IF EXISTS match_sentences(vector, int);
+CREATE FUNCTION match_sentences(
   query_embedding vector(1536),
   match_count int DEFAULT 20
 )
@@ -111,6 +118,7 @@ RETURNS TABLE (
   talk_id uuid,
   title text,
   speaker text,
+  url text,
   text text,
   similarity float
 )
@@ -121,6 +129,7 @@ AS $$
     sentence_embeddings.talk_id,
     sentence_embeddings.title,
     sentence_embeddings.speaker,
+    sentence_embeddings.url,
     sentence_embeddings.text,
     1 - (sentence_embeddings.embedding <=> query_embedding) as similarity
   FROM sentence_embeddings
