@@ -762,3 +762,78 @@ input:focus {
         flex-direction: column;
     }
 }
+/* ============================================
+   TALK BUILDER (custom feature)
+   ============================================ */
+
+#talk-input {
+    width: 100%;
+    padding: var(--spacing-sm);
+    background: var(--surface);
+    border: 2px solid var(--surface-light);
+    border-radius: var(--radius-md);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 1rem;
+    line-height: 1.5;
+    resize: vertical;
+    transition: all 0.2s ease;
+}
+
+#talk-input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(62, 207, 142, 0.1);
+}
+
+#talk-input:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.talk-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin: var(--spacing-sm) 0;
+}
+
+.talk-hint {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+
+.talk-text {
+    white-space: pre-wrap;
+    line-height: 1.7;
+    color: var(--text);
+}
+
+.talk-text mark {
+    color: var(--text);
+    padding: 0 2px;
+    border-radius: 2px;
+}
+
+mark.quote-ok {
+    background: rgba(62, 207, 142, 0.3);
+}
+
+mark.quote-warn {
+    background: rgba(245, 158, 11, 0.35);
+}
+
+.quote-status {
+    font-size: 0.75rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.quote-status.quote-ok {
+    color: var(--success);
+}
+
+.quote-status.quote-warn {
+    color: #f59e0b;
+}

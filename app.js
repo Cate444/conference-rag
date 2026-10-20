@@ -84,6 +84,10 @@ const ragBtn = document.getElementById('rag-btn');
 const ragResults = document.getElementById('rag-results');
 const ragStatus = document.getElementById('rag-status');
 
+const talkInput = document.getElementById('talk-input');
+const talkBtn = document.getElementById('talk-btn');
+const talkResults = document.getElementById('talk-results');
+
 // ============================================
 // SETUP BANNER DETECTION
 // ============================================
@@ -392,6 +396,9 @@ function setSearchReady(type, ready) {
     if (inputEl) inputEl.disabled = !ready;
     if (btnEl) btnEl.disabled = !ready;
 
+    // Talk Builder uses the same pipeline as RAG, so it's ready when RAG is
+    if (type === 'rag') setSearchReady('talk', ready);
+
     if (panelEl) {
         if (ready) {
             panelEl.classList.add('panel-ready');
@@ -580,6 +587,153 @@ async function askQuestion() {
 }
 
 // ============================================
+// TALK BUILDER (custom feature)
+// ============================================
+// For each section of the user's outline (in parallel):
+//   embed → match_sentences → top 2 talks → enrich-section (adds quotes)
+// Then: verify quotes → hide them behind ⟦Q#⟧ placeholders → polish-talk → restore quotes.
+// The placeholders guarantee the polish pass can't alter a quote: GPT never sees it.
+
+const MAX_TALK_SECTIONS = 12; // caps cost at roughly 2¢ per section
+let lastTalkText = '';
+
+async function buildTalk() {
+    const outline = talkInput ? talkInput.value.trim() : '';
+    if (!outline || !supabaseClient) return;
+
+    const sections = outline.split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
+    if (sections.length > MAX_TALK_SECTIONS) {
+        showResults('talk', `<div class="result-error">Please use ${MAX_TALK_SECTIONS} sections or fewer (you have ${sections.length}).</div>`);
+        return;
+    }
+
+    if (talkBtn) talkBtn.disabled = true;
+
+    try {
+        // Step 1: Find evidence for every section at once
+        showResults('talk', `<div class="searching">Finding evidence for ${sections.length} section${sections.length === 1 ? '' : 's'}...</div>`);
+        const enriched = await Promise.all(sections.map(enrichSection));
+
+        // Step 2: Verify each quote against its source, then hide it behind a placeholder
+        const quotes = [];
+        const draft = enriched.map(sec => {
+            let paragraph = sec.paragraph;
+            for (const q of sec.quotes) {
+                if (!q.text) continue;
+                // Attribute the quote to the talk that actually contains it (fallback: the title GPT named)
+                const source = sec.talks.find(t => isQuoteInText(q.text, t.text))
+                    || sec.talks.find(t => t.title === q.talk_title) || null;
+                const verified = sec.talks.some(t => isQuoteInText(q.text, t.text));
+                const protectedQuote = paragraph.includes(q.text);
+                const id = protectedQuote ? `⟦Q${quotes.length + 1}⟧` : null;
+                if (id) paragraph = paragraph.replace(q.text, id);
+                quotes.push({ id, text: q.text, source, verified });
+            }
+            return paragraph;
+        }).join('\n\n');
+
+        // Step 3: Polish the placeholder version for flow
+        showResults('talk', '<div class="searching">Polishing the full talk...</div>');
+        const { data, error } = await supabaseClient.functions.invoke('polish-talk', {
+            body: { draft }
+        });
+        if (error) throw new Error(data?.error || 'Failed to polish talk');
+
+        // If GPT dropped a placeholder, use the unpolished draft so no quote is lost
+        const polishedOk = data.missing_placeholders.length === 0;
+        renderTalk(polishedOk ? data.talk : draft, quotes, polishedOk);
+    } catch (err) {
+        showResults('talk', `<div class="result-error">Error: ${escapeHtml(err.message)}</div>`);
+    } finally {
+        if (talkBtn) talkBtn.disabled = false;
+    }
+}
+
+// Retrieval + enrichment for one section — the same pipeline as RAG, with a different prompt
+async function enrichSection(section) {
+    const embedding = await getEmbedding(section);
+    const results = await searchSentences(embedding);
+    const topTalks = await fetchFullTalkText(groupByTalk(results).slice(0, 2));
+    const talks = topTalks.map(t => ({ ...t, speaker: cleanSpeaker(t.speaker) }));
+
+    const { data, error } = await supabaseClient.functions.invoke('enrich-section', {
+        body: {
+            section,
+            context_talks: talks.map(({ title, speaker, text }) => ({ title, speaker, text }))
+        }
+    });
+    if (error) throw new Error(data?.error || 'Failed to add evidence to a section');
+
+    return { paragraph: data.paragraph, quotes: data.quotes, talks };
+}
+
+function renderTalk(text, quotes, polishedOk) {
+    const byId = Object.fromEntries(quotes.filter(q => q.id).map(q => [q.id, q]));
+
+    // Escape the author's text, and swap placeholders back in as highlighted quotes
+    const talkHtml = text.split(/(⟦Q\d+⟧)/).map(part => {
+        const q = byId[part];
+        if (!q) return escapeHtml(part);
+        return `<mark class="${q.verified ? 'quote-ok' : 'quote-warn'}">${escapeHtml(q.text)}</mark>`;
+    }).join('');
+    lastTalkText = text.replace(/⟦Q\d+⟧/g, id => byId[id] ? byId[id].text : id);
+
+    const verifiedCount = quotes.filter(q => q.verified).length;
+    let html = `<div class="result-card rag-answer">
+        <div class="result-card-header">
+            <div class="result-title">Your Talk</div>
+            <button id="talk-copy-btn" class="btn-secondary">Copy</button>
+        </div>
+        ${polishedOk ? '' : '<div class="result-error">The polish step dropped a quote, so this is the unpolished version with all quotes intact.</div>'}
+        <div class="talk-text">${talkHtml}</div>
+    </div>`;
+
+    html += `<div class="result-sources"><strong>Evidence used:</strong> ${verifiedCount} of ${quotes.length} quote${quotes.length === 1 ? '' : 's'} verified word-for-word</div>`;
+    for (const q of quotes) {
+        const status = q.verified
+            ? '<span class="quote-status quote-ok">✅ Verified</span>'
+            : '<span class="quote-status quote-warn">⚠️ Not found word-for-word — check before using</span>';
+        const sourceLine = q.source
+            ? `<a href="${escapeHtml(q.source.url)}" target="_blank" class="result-title-link">${escapeHtml(q.source.title)}</a> · ${escapeHtml(q.source.speaker)}`
+            : 'Unknown source';
+        html += `<div class="result-card result-source">
+            <div class="result-card-header">
+                <div class="result-title">${sourceLine}</div>
+                ${status}
+            </div>
+            <div class="result-sentences">"${escapeHtml(q.text)}"</div>
+        </div>`;
+    }
+
+    showResults('talk', html);
+}
+
+// "By President Russell M. Nelson" → "President Russell M. Nelson"
+function cleanSpeaker(speaker) {
+    return (speaker || '').replace(/ /g, ' ').replace(/^(Presented\s+)?By\s+/i, '').trim();
+}
+
+// Normalize text so formatting differences (curly quotes, dashes, spacing, case) don't count as misquotes
+function normalizeForMatch(text) {
+    return text.toLowerCase()
+        .replace(/[‘’]/g, "'")
+        .replace(/[“”]/g, '"')
+        .replace(/[–—]/g, '-')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+// True if the quote appears word-for-word in the source. A quote may skip words
+// with an ellipsis, so each fragment must appear in the source on its own.
+function isQuoteInText(quote, sourceText) {
+    const source = normalizeForMatch(sourceText);
+    const fragments = quote.split(/\.\.\.|…/)
+        .map(f => normalizeForMatch(f).replace(/^[\s"',.;:]+|[\s"',.;:]+$/g, ''))
+        .filter(f => f.length > 0);
+    return fragments.length > 0 && fragments.every(f => source.includes(f));
+}
+
+// ============================================
 // SHARED SEARCH UTILITIES
 // ============================================
 
@@ -750,6 +904,19 @@ if (semanticInput) semanticInput.addEventListener('keypress', (e) => {
 if (ragBtn) ragBtn.addEventListener('click', askQuestion);
 if (ragInput) ragInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') askQuestion();
+});
+
+// Talk Builder (no Enter shortcut — the textarea needs Enter for new lines)
+if (talkBtn) talkBtn.addEventListener('click', buildTalk);
+if (talkResults) talkResults.addEventListener('click', async (e) => {
+    if (e.target.id !== 'talk-copy-btn') return;
+    try {
+        await navigator.clipboard.writeText(lastTalkText);
+        e.target.textContent = 'Copied!';
+        setTimeout(() => { e.target.textContent = 'Copy'; }, 2000);
+    } catch (err) {
+        console.error('Failed to copy talk:', err);
+    }
 });
 
 // ============================================

@@ -132,6 +132,24 @@
                     </div>
                     <div class="search-results" id="rag-results"></div>
                 </div>
+
+                <!-- Panel 4: Talk Builder (custom feature) -->
+                <div class="search-panel" id="talk-panel">
+                    <div class="panel-header">
+                        <h3>✍️ Talk Builder</h3>
+                        <span class="status-badge not-ready" id="talk-status">🔴 Not Ready</span>
+                    </div>
+                    <p class="panel-description">Paste your thoughts or a rough outline. Separate sections with a blank
+                        line. Each section gets supporting quotes from conference talks, then the whole talk is polished
+                        for flow. Every quote is checked word-for-word against its source.</p>
+                    <textarea id="talk-input" rows="10" disabled
+                        placeholder="Intro: why I chose this topic...&#10;&#10;Section 1: ...&#10;&#10;Conclusion: ..."></textarea>
+                    <div class="talk-actions">
+                        <small class="talk-hint">≈ $0.15 per run with GPT-4o</small>
+                        <button id="talk-btn" class="btn-primary" disabled>Build My Talk</button>
+                    </div>
+                    <div class="search-results" id="talk-results"></div>
+                </div>
             </div>
         </div>
     </div>

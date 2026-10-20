@@ -420,3 +420,9 @@ verify_jwt = false
 
 [functions.generate-answer]
 verify_jwt = false
+
+[functions.enrich-section]
+verify_jwt = false
+
+[functions.polish-talk]
+verify_jwt = false
